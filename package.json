@@ -1,0 +1,36 @@
+{
+  "name": "cv-screening-automation",
+  "version": "1.0.0",
+  "description": "CV Screening Automation pipeline berbasis n8n dengan PostgreSQL, Redis, dan OpenAI API",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "jest",
+    "test:unit": "jest --testPathPattern=\"tests/unit\"",
+    "test:property": "jest --testPathPattern=\"tests/property\"",
+    "test:integration": "jest --testPathPattern=\"tests/integration\"",
+    "migrate": "node scripts/run-migrations.js"
+  },
+  "dependencies": {
+    "ioredis": "5.3.2",
+    "pg": "8.11.3",
+    "uuid": "9.0.1"
+  },
+  "devDependencies": {
+    "fast-check": "3.15.0",
+    "jest": "29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/tests/unit/**/*.test.js",
+      "**/tests/property/**/*.test.js",
+      "**/tests/integration/**/*.test.js"
+    ],
+    "testTimeout": 30000,
+    "verbose": true
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
