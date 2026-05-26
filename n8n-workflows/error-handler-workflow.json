@@ -1,0 +1,190 @@
+{
+  "name": "Error_Handler_Workflow",
+  "nodes": [
+    {
+      "id": "eh-0001-4000-8000-000000000001",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {}
+    },
+    {
+      "id": "eh-0002-4000-8000-000000000002",
+      "name": "Parse Error Details",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300],
+      "parameters": {
+        "jsCode": "// Parse Error Details\n// Requirements: 12.1, 12.2, 12.4\n\nconst error = $json.error;\nconst workflow = $json.workflow;\nconst execution = $json.execution;\n\n// Classify error\nfunction classifyError(errorMessage) {\n  const messageLower = (errorMessage || '').toLowerCase();\n  \n  if (messageLower.includes('invalid_dimension_score') || \n      messageLower.includes('parsing_incomplete') || \n      messageLower.includes('no_jd_available')) {\n    return { errorCode: messageLower.split(':')[0].trim().toUpperCase().replace(/\\s+/g, '_') || 'PROCESSING_ERROR', isRetryable: false, shouldNotify: true };\n  }\n  \n  if (messageLower.includes('openai') || messageLower.includes('timeout') || messageLower.includes('network')) {\n    return { errorCode: 'API_ERROR', isRetryable: true, shouldNotify: true };\n  }\n  \n  if (messageLower.includes('db_') || messageLower.includes('database') || messageLower.includes('postgres')) {\n    return { errorCode: 'DB_ERROR', isRetryable: true, shouldNotify: true };\n  }\n  \n  if (messageLower.includes('redis')) {\n    return { errorCode: 'REDIS_ERROR', isRetryable: true, shouldNotify: true };\n  }\n  \n  return { errorCode: 'UNKNOWN_ERROR', isRetryable: false, shouldNotify: true };\n}\n\nconst errorMessage = error?.message || error?.description || JSON.stringify(error);\nconst classification = classifyError(errorMessage);\n\nreturn [{\n  json: {\n    errorMessage,\n    errorCode: classification.errorCode,\n    isRetryable: classification.isRetryable,\n    shouldNotify: classification.shouldNotify,\n    workflowId: workflow?.id,\n    workflowName: workflow?.name,\n    executionId: execution?.id,\n    executionMode: execution?.mode,\n    nodeName: $json.node?.name || 'unknown',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      }
+    },
+    {
+      "id": "eh-0003-4000-8000-000000000003",
+      "name": "Log to PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [750, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details, error_code, ip_address, created_at) VALUES (NULL, $1, 'workflow_execution', $2, $3::jsonb, $4, NULL, NOW()) RETURNING id",
+        "additionalFields": {
+          "queryParams": "={{ 'WORKFLOW_ERROR: ' + $json.errorCode }},{{ $json.executionId || 'unknown' }},{{ JSON.stringify({ errorMessage: $json.errorMessage, workflowId: $json.workflowId, workflowName: $json.workflowName, nodeName: $json.nodeName, executionMode: $json.executionMode }) }},{{ $json.errorCode }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credential",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "id": "eh-0004-4000-8000-000000000004",
+      "name": "Notify on Critical Error",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 3,
+      "position": [1000, 200],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "channel": "={{ $env.SLACK_CHANNEL || '#cv-screening-alerts' }}",
+        "text": "={{ '🚨 *Workflow Error*\\nWorkflow: ' + $json.workflowName + '\\nNode: ' + $json.nodeName + '\\nError: ' + $json.errorMessage + '\\nCode: ' + $json.errorCode + '\\nExecution: ' + $json.executionId }}"
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "slack-api-credential",
+          "name": "Slack API"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "id": "eh-0005-4000-8000-000000000005",
+      "name": "Should Notify Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1000, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "should-notify-condition",
+              "leftValue": "={{ $json.shouldNotify }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "eh-0006-4000-8000-000000000006",
+      "name": "Log Alert Sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1300, 200],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO notifications (event_type, candidate_id, channel, status, details, created_at) VALUES ($1, NULL, 'slack', 'sent', $2::jsonb, NOW()) RETURNING id",
+        "additionalFields": {
+          "queryParams": "={{ 'WORKFLOW_ERROR_' + $json.errorCode }},{{ JSON.stringify({ workflowId: $json.workflowId, executionId: $json.executionId }) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credential",
+          "name": "PostgreSQL"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Error Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Error Details": {
+      "main": [
+        [
+          {
+            "node": "Log to PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Should Notify Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Notify Check": {
+      "main": [
+        [
+          {
+            "node": "Notify on Critical Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify on Critical Error": {
+      "main": [
+        [
+          {
+            "node": "Log Alert Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  },
+  "pinData": {},
+  "versionId": "eh-0001-4000-8000-000000000001",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z",
+      "id": "tag-error-handler",
+      "name": "error-handler"
+    }
+  ]
+}

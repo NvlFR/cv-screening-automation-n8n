@@ -79,3 +79,6 @@ temp/
 
 # Kiro (uncomment jika tidak ingin commit spec/steering)
 .kiro/
+.claude/
+CLAUDE.md
+GEMINI.md

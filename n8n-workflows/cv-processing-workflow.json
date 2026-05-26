@@ -1,0 +1,316 @@
+{
+  "name": "CV_Processing_Workflow",
+  "nodes": [
+    {
+      "id": "cp-0001-4000-8000-000000000001",
+      "name": "Webhook (CV Processing Trigger)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cv-process",
+        "responseMode": "lastNode",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "webhookId": "cv-processing-webhook"
+    },
+    {
+      "id": "cp-0002-4000-8000-000000000002",
+      "name": "Parse Job Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300],
+      "parameters": {
+        "jsCode": "// Parse CV Processing Job\n// Requirements: 2.1, 2.2, 2.3\n\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const job = item.json;\n\n  // Validate job structure\n  if (!job.jobId || !job.filename) {\n    results.push({\n      json: {\n        ...item.json,\n        error: 'Invalid job structure: jobId and filename required',\n        status: 'ERROR'\n      }\n    });\n    continue;\n  }\n\n  results.push({\n    json: {\n      jobId: job.jobId,\n      filename: job.filename,\n      fileKey: job.fileKey,\n      source: job.source,\n      positionId: job.positionId,\n      cvText: job.cvText || job.rawText || '',\n      enqueuedAt: job.enqueuedAt,\n      status: 'PARSING'\n    }\n  });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "cp-0003-4000-8000-000000000003",
+      "name": "CV Parser (OpenAI)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 300],
+      "parameters": {
+        "jsCode": "// CV Parser Node — mengekstrak data terstruktur dari CV\n// Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6\n// Uses OpenAI API via $env.OPENAI_API_KEY\n\nconst items = $input.all();\nconst results = [];\n\nconst SKILL_NORMALIZATION_MAP = {\n  'js': 'JavaScript', 'javascript': 'JavaScript',\n  'ts': 'TypeScript', 'typescript': 'TypeScript',\n  'node': 'Node.js', 'nodejs': 'Node.js',\n  'react': 'React', 'vue': 'Vue.js',\n  'python': 'Python', 'django': 'Django',\n  'ml': 'Machine Learning', 'machine learning': 'Machine Learning',\n  'dl': 'Deep Learning', 'ai': 'Artificial Intelligence',\n  'sql': 'SQL', 'mysql': 'MySQL', 'postgres': 'PostgreSQL',\n  'aws': 'AWS', 'gcp': 'Google Cloud Platform',\n  'docker': 'Docker', 'k8s': 'Kubernetes',\n  'java': 'Java', 'go': 'Go', 'rust': 'Rust',\n};\n\nfunction cleanText(text) {\n  if (typeof text !== 'string') return '';\n  return text\n    .replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '')\n    .replace(/[ \\t]+/g, ' ')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .split('\\n')\n    .map(l => l.trim())\n    .join('\\n')\n    .trim();\n}\n\nfunction normalizeSkills(skills) {\n  if (!Array.isArray(skills)) return [];\n  return skills\n    .filter(s => typeof s === 'string' && s.trim())\n    .map(s => SKILL_NORMALIZATION_MAP[s.toLowerCase()] || s.trim())\n    .filter((v, i, a) => a.findIndex(t => t.toLowerCase() === v.toLowerCase()) === i);\n}\n\nfor (const item of items) {\n  const job = item.json;\n  const cvText = cleanText(job.cvText || '');\n\n  if (!cvText) {\n    results.push({\n      json: {\n        ...job,\n        status: 'PARSING_INCOMPLETE',\n        name: null, email: null, phone: null,\n        skills: [], experience_years: null,\n        education: [], certifications: [],\n        languages: [], experience_detail: []\n      }\n    });\n    continue;\n  }\n\n  // Mock OpenAI response for development/testing\n  // In production, use OpenAI node or API call\n  const mockParsed = {\n    name: 'Parsed Candidate',\n    email: job.jobId + '@parsed.example',\n    phone: '+6281234567890',\n    location: 'Indonesia',\n    skills: ['JavaScript', 'Node.js', 'React', 'Python', 'SQL'],\n    experience_years: 5,\n    experience_detail: [\n      { company: 'Tech Corp', title: 'Software Engineer', duration_months: 36, industry: 'Technology' }\n    ],\n    education: [\n      { degree: 'S1 Teknik Informatika', institution: 'Universitas Indonesia', year: 2018 }\n    ],\n    certifications: [\n      { name: 'AWS Certified Developer', issuer: 'Amazon', year: 2023 }\n    ],\n    languages: [\n      { language: 'Indonesia', proficiency: 'Native' },\n      { language: 'English', proficiency: 'Fluent' }\n    ]\n  };\n\n  const normalizedSkills = normalizeSkills(mockParsed.skills);\n  const nameMissing = !mockParsed.name || mockParsed.name === null;\n  const emailMissing = !mockParsed.email || mockParsed.email === null;\n  const status = (nameMissing || emailMissing) ? 'PARSING_INCOMPLETE' : 'PENDING';\n\n  results.push({\n    json: {\n      ...job,\n      ...mockParsed,\n      skills: normalizedSkills,\n      status,\n      parsedAt: new Date().toISOString()\n    }\n  });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "cp-0004-4000-8000-000000000004",
+      "name": "Check Parsing Status",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1000, 300],
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.status }}",
+        "rules": {
+          "rules": [
+            { "value2": "PARSING_INCOMPLETE", "operation": "equals" },
+            { "value2": "PENDING", "operation": "equals" }
+          ]
+        },
+        "fallbackOutput": "default"
+      }
+    },
+    {
+      "id": "cp-0005-4000-8000-000000000005",
+      "name": "Save PARSING_INCOMPLETE Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1250, 100],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO candidate_records (name, email, phone, skills, experience_years, education, certifications, languages, experience_detail, cv_url, status, source, job_id, created_at, updated_at) VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13, NOW(), NOW()) RETURNING id",
+        "additionalFields": {
+          "queryParams": "={{ $json.name }},{{ $json.email }},{{ $json.phone }},{{ JSON.stringify($json.skills || []) }},{{ $json.experience_years }},{{ JSON.stringify($json.education || []) }},{{ JSON.stringify($json.certifications || []) }},{{ JSON.stringify($json.languages || []) }},{{ JSON.stringify($json.experience_detail || []) }},{{ $json.fileKey }},{{ $json.status }},{{ $json.source }},{{ $json.positionId }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-credential", "name": "PostgreSQL" }
+      }
+    },
+    {
+      "id": "cp-0006-4000-8000-000000000006",
+      "name": "Notify PARSING_INCOMPLETE",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 3,
+      "position": [1500, 100],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "channel": "={{ $env.SLACK_CHANNEL || '#cv-screening' }}",
+        "text": "={{ '⚠️ CV Parsing Tidak Lengkap\\nFile: ' + $json.filename + '\\nJob: ' + $json.jobId }}"
+      },
+      "credentials": {
+        "slackApi": { "id": "slack-api-credential", "name": "Slack API" }
+      }
+    },
+    {
+      "id": "cp-0007-4000-8000-000000000007",
+      "name": "Duplicate Detection",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id FROM candidate_records WHERE email = $1 LIMIT 1",
+        "additionalFields": {
+          "queryParams": "={{ $json.email }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-credential", "name": "PostgreSQL" }
+      }
+    },
+    {
+      "id": "cp-0008-4000-8000-000000000008",
+      "name": "Route by Duplicate Status",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1500, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "dup-check",
+              "leftValue": "={{ $json.length > 0 }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "cp-0009-4000-8000-000000000009",
+      "name": "Save DUPLICATE Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1750, 180],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO candidate_records (name, email, phone, skills, experience_years, education, certifications, languages, experience_detail, cv_url, status, source, job_id, created_at, updated_at) VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, 'DUPLICATE', $11, $12, NOW(), NOW()) RETURNING id",
+        "additionalFields": {
+          "queryParams": "={{ $('Duplicate Detection').item(0).json[0]?.id ? $('Duplicate Detection').item(0).json[0].id : null }},{{ $json.email }},{{ $json.phone }},{{ JSON.stringify($json.skills || []) }},{{ $json.experience_years }},{{ JSON.stringify($json.education || []) }},{{ JSON.stringify($json.certifications || []) }},{{ JSON.stringify($json.languages || []) }},{{ JSON.stringify($json.experience_detail || []) }},{{ $json.fileKey }},{{ $json.source }},{{ $json.positionId }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-credential", "name": "PostgreSQL" }
+      }
+    },
+    {
+      "id": "cp-0010-4000-8000-000000000010",
+      "name": "Notify DUPLICATE",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 3,
+      "position": [2000, 180],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "channel": "={{ $env.SLACK_CHANNEL || '#cv-screening' }}",
+        "text": "={{ '⚠️ Duplicate Candidate Detected\\nEmail: ' + $json.email + '\\nFile: ' + $json.filename }}"
+      },
+      "credentials": {
+        "slackApi": { "id": "slack-api-credential", "name": "Slack API" }
+      }
+    },
+    {
+      "id": "cp-0011-4000-8000-000000000011",
+      "name": "JD Matching (OpenAI)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1750, 420],
+      "parameters": {
+        "jsCode": "// JD Matching Node\n// Requirements: 4.1, 4.2, 4.3, 4.4, 4.5\n// Matches candidate profile against Job Description\n\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const data = item.json;\n\n  // Mock JD matching result\n  // In production, call OpenAI API with JD matching prompt\n  const matchResult = {\n    skill_match: { score: 75, reasoning: 'Good skill match', matched_skills: ['JavaScript', 'React'], missing_skills: [] },\n    experience_relevance: { score: 80, reasoning: 'Relevant experience' },\n    industry_relevance: { score: 70, reasoning: 'Some industry match' },\n    seniority_fit: { score: 65, reasoning: 'Moderate seniority match' },\n    keyword_overlap: { score: 80, reasoning: 'Good keyword overlap' },\n    mandatory_skills_status: { 'JavaScript': 'matched', 'React': 'matched' }\n  };\n\n  results.push({\n    json: {\n      ...data,\n      ...matchResult,\n      jdMatchCompleted: true,\n      jdMatchedAt: new Date().toISOString()\n    }\n  });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "cp-0012-4000-8000-000000000012",
+      "name": "Scoring Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 420],
+      "parameters": {
+        "jsCode": "// Scoring Engine Node\n// Requirements: 5.1, 5.2, 5.3, 5.4\n\nconst items = $input.all();\nconst results = [];\n\n// Education scoring (S3=100, S2=85, S1=70, D4=60, SMA=30)\nconst EDUCATION_SCORES = {\n  's3': 100, 'magister': 85, 'master': 85, 's2': 85,\n  's1': 70, 'sarjana': 70, 'bachelor': 70, 'undergraduate': 70,\n  'd4': 60, 'diploma': 60,\n  'sma': 30, 'smk': 30, 'high school': 30\n};\n\n// WEIGHTS: skillMatch 40%, experience 30%, education 10%, industry 10%, certification 10%\nconst WEIGHTS = { skillMatch: 0.40, experience: 0.30, education: 0.10, industry: 0.10, certification: 0.10 };\n\nfor (const item of items) {\n  const data = item.json;\n\n  // Calculate education score\n  const education = data.education || [];\n  let educationScore = 30; // default SMA\n  for (const edu of education) {\n    const degree = (edu.degree || '').toLowerCase();\n    for (const [key, score] of Object.entries(EDUCATION_SCORES)) {\n      if (degree.includes(key)) {\n        educationScore = Math.max(educationScore, score);\n      }\n    }\n  }\n\n  // Mock certification score\n  const certScore = (data.certifications || []).length > 0 ? 75 : 30;\n\n  // Calculate weighted score\n  const rawScore =\n    (data.skill_match?.score || 0) * WEIGHTS.skillMatch +\n    (data.experience_relevance?.score || 0) * WEIGHTS.experience +\n    educationScore * WEIGHTS.education +\n    (data.industry_relevance?.score || 0) * WEIGHTS.industry +\n    certScore * WEIGHTS.certification;\n\n  const score = Math.min(100, Math.max(0, Math.round(rawScore)));\n  const recommendation = score >= 80 ? 'Strong Fit' : score >= 60 ? 'Moderate Fit' : 'Weak Fit';\n\n  results.push({\n    json: {\n      ...data,\n      score,\n      recommendation,\n      dimension_scores: {\n        skill_match: data.skill_match?.score || 0,\n        experience: data.experience_relevance?.score || 0,\n        education: educationScore,\n        industry: data.industry_relevance?.score || 0,\n        certification: certScore\n      },\n      scoredAt: new Date().toISOString()\n    }\n  });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "cp-0013-4000-8000-000000000013",
+      "name": "Summary Generator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 420],
+      "parameters": {
+        "jsCode": "// Summary Generator Node\n// Requirements: 6.1, 6.2, 6.3, 6.4\n// Generates Indonesian narrative summary using OpenAI\n\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const data = item.json;\n  const candidateName = data.name || 'Kandidat';\n  const score = data.score || 0;\n  const recommendation = data.recommendation || 'Unknown';\n  const skillMatch = data.skill_match?.score || 0;\n  const experience = data.experience_relevance?.score || 0;\n\n  // Mock summary generation\n  // In production, call OpenAI with summary generation prompt\n  const summary = `${candidateName} adalah kandidat dengan skor ${score}/100 (${recommendation}). ` +\n    `Kecocokan skill ${skillMatch}%, relevansi pengalaman ${experience}%. ` +\n    `Skill utama: ${(data.skills || []).slice(0, 3).join(', ') || 'belum teridentifikasi'}. ` +\n    `Pengalaman ${data.experience_years || 0} tahun.`;\n\n  results.push({\n    json: {\n      ...data,\n      summary,\n      summaryGenerated: true,\n      summaryGeneratedAt: new Date().toISOString()\n    }\n  });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "cp-0014-4000-8000-000000000014",
+      "name": "Shortlisting Evaluation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2500, 420],
+      "parameters": {
+        "jsCode": "// Shortlisting Evaluation Node\n// Requirements: 7.1, 7.2, 7.3, 7.5\n// All conditions must be true: score >= 80 AND all mandatory skills matched AND experience >= min\n\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const data = item.json;\n  const score = data.score || 0;\n  const mandatorySkills = data.mandatory_skills_status || {};\n  const experienceYears = data.experience_years || 0;\n  const minExperience = data.min_experience_years || 0;\n\n  const allMandatoryMatched = Object.values(mandatorySkills).every(s => s === 'matched');\n  const hasEnoughExperience = experienceYears >= minExperience;\n  const scoreOk = score >= 80;\n\n  const isShortlisted = scoreOk && allMandatoryMatched && hasEnoughExperience;\n\n  let reason;\n  if (isShortlisted) {\n    reason = `Score ${score} >= 80, all mandatory skills matched, experience ${experienceYears}y >= ${minExperience}y required`;\n  } else {\n    const reasons = [];\n    if (!scoreOk) reasons.push(`Score ${score} < 80`);\n    if (!allMandatoryMatched) {\n      const missing = Object.entries(mandatorySkills)\n        .filter(([, s]) => s === 'missing')\n        .map(([k]) => k)\n        .join(', ');\n      if (missing) reasons.push(`Missing mandatory skills: ${missing}`);\n    }\n    if (!hasEnoughExperience) reasons.push(`Experience ${experienceYears}y < ${minExperience}y required`);\n    reason = reasons.join('; ');\n  }\n\n  results.push({\n    json: {\n      ...data,\n      isShortlisted,\n      shortlistReason: reason,\n      shortlistEvaluatedAt: new Date().toISOString()\n    }\n  });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "cp-0015-4000-8000-000000000015",
+      "name": "Save Final Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [2750, 420],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO candidate_records (name, email, phone, skills, experience_years, education, certifications, languages, experience_detail, score, dimension_scores, recommendation, summary, cv_url, status, mandatory_skills_status, jd_match_details, source, job_id, created_at, updated_at) VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11::jsonb, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18, $19, NOW(), NOW()) RETURNING id",
+        "additionalFields": {
+          "queryParams": "={{ $json.name }},{{ $json.email }},{{ $json.phone }},{{ JSON.stringify($json.skills || []) }},{{ $json.experience_years }},{{ JSON.stringify($json.education || []) }},{{ JSON.stringify($json.certifications || []) }},{{ JSON.stringify($json.languages || []) }},{{ JSON.stringify($json.experience_detail || []) }},{{ $json.score }},{{ JSON.stringify($json.dimension_scores || {}) }},{{ $json.recommendation }},{{ $json.summary }},{{ $json.fileKey }},{{ $json.isShortlisted ? 'Shortlisted' : 'Not Shortlisted' }},{{ JSON.stringify($json.mandatory_skills_status || {}) }},{{ JSON.stringify({ skill_match: $json.skill_match, experience_relevance: $json.experience_relevance, industry_relevance: $json.industry_relevance, seniority_fit: $json.seniority_fit, keyword_overlap: $json.keyword_overlap }) }},{{ $json.source }},{{ $json.positionId }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-credential", "name": "PostgreSQL" }
+      }
+    },
+    {
+      "id": "cp-0016-4000-8000-000000000016",
+      "name": "Notify SHORTLISTED",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 3,
+      "position": [3000, 300],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "channel": "={{ $env.SLACK_CHANNEL || '#cv-screening' }}",
+        "text": "={{ '🎉 Kandidat Shortlisted\\nNama: ' + $json.name + '\\nSkor: ' + $json.score + '/100\\nRekomendasi: ' + $json.recommendation }}"
+      },
+      "credentials": {
+        "slackApi": { "id": "slack-api-credential", "name": "Slack API" }
+      },
+      "disabled": true
+    },
+    {
+      "id": "cp-0017-4000-8000-000000000017",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [3000, 500],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'processed', jobId: $json.jobId, score: $json.score, recommendation: $json.recommendation, isShortlisted: $json.isShortlisted }) }}",
+        "options": { "responseCode": 200 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook (CV Processing Trigger)": {
+      "main": [[{ "node": "Parse Job Payload", "type": "main", "index": 0 }]]
+    },
+    "Parse Job Payload": {
+      "main": [[{ "node": "CV Parser (OpenAI)", "type": "main", "index": 0 }]]
+    },
+    "CV Parser (OpenAI)": {
+      "main": [[{ "node": "Check Parsing Status", "type": "main", "index": 0 }]]
+    },
+    "Check Parsing Status": {
+      "main": [
+        [{ "node": "Save PARSING_INCOMPLETE Record", "type": "main", "index": 0 }],
+        [{ "node": "Duplicate Detection", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save PARSING_INCOMPLETE Record": {
+      "main": [[{ "node": "Notify PARSING_INCOMPLETE", "type": "main", "index": 0 }]]
+    },
+    "Duplicate Detection": {
+      "main": [[{ "node": "Route by Duplicate Status", "type": "main", "index": 0 }]]
+    },
+    "Route by Duplicate Status": {
+      "main": [
+        [{ "node": "Save DUPLICATE Record", "type": "main", "index": 0 }],
+        [{ "node": "JD Matching (OpenAI)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save DUPLICATE Record": {
+      "main": [[{ "node": "Notify DUPLICATE", "type": "main", "index": 0 }]]
+    },
+    "JD Matching (OpenAI)": {
+      "main": [[{ "node": "Scoring Engine", "type": "main", "index": 0 }]]
+    },
+    "Scoring Engine": {
+      "main": [[{ "node": "Summary Generator", "type": "main", "index": 0 }]]
+    },
+    "Summary Generator": {
+      "main": [[{ "node": "Shortlisting Evaluation", "type": "main", "index": 0 }]]
+    },
+    "Shortlisting Evaluation": {
+      "main": [
+        [{ "node": "Notify SHORTLISTED", "type": "main", "index": 0 }],
+        [{ "node": "Respond OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "Notify SHORTLISTED": {
+      "main": [[{ "node": "Save Final Record", "type": "main", "index": 0 }]]
+    },
+    "Save Final Record": {
+      "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "Error_Handler_Workflow"
+  },
+  "staticData": null,
+  "meta": { "templateCredsSetupCompleted": false, "instanceId": "" },
+  "pinData": {},
+  "versionId": "cp-0001-4000-8000-000000000001",
+  "triggerCount": 0,
+  "tags": [
+    { "createdAt": "2024-01-01T00:00:00.000Z", "updatedAt": "2024-01-01T00:00:00.000Z", "id": "tag-cv-processing", "name": "cv-processing" }
+  ]
+}
