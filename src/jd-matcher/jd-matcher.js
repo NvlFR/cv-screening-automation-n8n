@@ -1,6 +1,6 @@
 'use strict';
 
-const { callOpenAI } = require('../cv-parser/openai-client');
+const { callAI } = require('../cv-parser/ai-client');
 const { parseJDMatcherOutput } = require('./parser');
 
 /**
@@ -66,7 +66,7 @@ Berikan evaluasi dalam format JSON:
 }
 
 /**
- * Menyiapkan teks JD yang akan dikirim ke OpenAI.
+ * Menyiapkan teks JD yang akan dikirim ke AI.
  * Menggabungkan raw_jd_text dengan informasi terstruktur dari JD jika tersedia.
  *
  * @param {Object} jd - Job Description object dari database
@@ -182,8 +182,8 @@ async function matchCandidateToJD(candidateProfile, jdText) {
   // Bangun prompt
   const userPrompt = buildJDMatchingPrompt(resolvedJDText, candidateProfileJson);
 
-  // Panggil OpenAI
-  const rawResponse = await callOpenAI({
+  // Panggil AI
+  const rawResponse = await callAI({
     systemPrompt: JD_MATCHING_SYSTEM_PROMPT,
     userPrompt,
     maxTokens: 2000,

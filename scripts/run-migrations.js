@@ -21,6 +21,7 @@ const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations');
 const MIGRATION_FILES = [
   '001_initial_schema.sql',
   '002_indexes.sql',
+  '003_shortlist_reason.sql',
 ];
 
 /**

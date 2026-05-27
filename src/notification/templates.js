@@ -79,6 +79,23 @@ Silakan cek konfigurasi notification service dan kirim notifikasi secara manual 
 }
 
 /**
+ * Template untuk event CANDIDATE_NOT_SHORTLISTED.
+ */
+function templateNotShortlisted({ candidateName, score, recommendation }) {
+  return {
+    subject: `📋 Hasil Screening CV: ${candidateName || 'Kandidat'}`,
+    body: `Mohon maaf, saat ini kandidat belum memenuhi kriteria shortlist kami.
+
+**Nama:** ${candidateName || '-'}
+**Skor Akhir:** ${score ?? '-'}/100
+**Recommendation:** ${recommendation || '-'}
+
+Data telah disimpan dalam database untuk referensi posisi mendatang.`,
+    channels: ['telegram'],
+  };
+}
+
+/**
  * Mendapatkan template berdasarkan event type.
  *
  * @param {string} eventType - SHORTLISTED, POSSIBLE_DUPLICATE, PARSING_INCOMPLETE, NOTIFICATION_FAILED
@@ -97,6 +114,8 @@ function getTemplate(eventType, payload) {
       return templateParsingIncomplete(safePayload);
     case 'NOTIFICATION_FAILED':
       return templateNotificationFailed(safePayload);
+    case 'CANDIDATE_NOT_SHORTLISTED':
+      return templateNotShortlisted(safePayload);
     default:
       return {
         subject: `Notification: ${eventType}`,
@@ -112,4 +131,5 @@ module.exports = {
   templatePossibleDuplicate,
   templateParsingIncomplete,
   templateNotificationFailed,
+  templateNotShortlisted,
 };

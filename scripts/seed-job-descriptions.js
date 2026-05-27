@@ -93,7 +93,7 @@ async function seedJobDescriptions() {
     console.error('[Seed] ERROR:', err.message);
     process.exit(1);
   } finally {
-    await db.end();
+    await db.closePool();
   }
 }
 

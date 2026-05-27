@@ -84,22 +84,29 @@ function parseJDMatcherOutput(rawOutput) {
   }
 
   // Bersihkan markdown code block jika ada (defensive)
-  const jsonStr = rawOutput
+  let jsonStr = rawOutput
     .replace(/^```json\s*/i, '')
     .replace(/^```\s*/i, '')
     .replace(/\s*```$/i, '')
     .trim();
 
   if (!jsonStr) {
-    throw new Error('JD_MATCHER_PARSE_ERROR: Output OpenAI kosong');
+    throw new Error('JD_MATCHER_PARSE_ERROR: Output AI kosong');
   }
 
   // Parse JSON
   let parsed;
   try {
-    parsed = JSON.parse(jsonStr);
+    // Mencari bagian JSON di dalam respon AI (handle jika ada teks tambahan)
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('Tidak ditemukan format JSON dalam respon AI');
+    }
+    
+    parsed = JSON.parse(jsonMatch[0]);
   } catch (parseError) {
-    throw new Error(`JD_MATCHER_PARSE_ERROR: Response OpenAI bukan JSON valid: ${parseError.message}`);
+    console.error(`[JDMatcher] Raw Response: ${rawOutput}`);
+    throw new Error(`JD_MATCHER_PARSE_ERROR: Response AI bukan JSON valid: ${parseError.message}`);
   }
 
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {

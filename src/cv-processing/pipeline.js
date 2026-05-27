@@ -1,5 +1,7 @@
 'use strict';
 
+require('dotenv').config({ override: true });
+
 /**
  * CV Processing Pipeline — mengintegrasikan semua komponen pemrosesan CV.
  *
@@ -26,8 +28,8 @@ const db = require('../db/client');
 const config = require('../config');
 
 const { parseCV } = require('../cv-parser/cv-parser');
-const { extractText } = require('../cv-parser/text-extractor');
 const { DuplicateDetector } = require('../duplicate-detector/detector');
+const { sendNotification: sendNotificationService } = require('../notification/notification-service');
 const { getActiveJD } = require('../jd-matcher/jd-fetcher');
 const { matchCandidateToJD } = require('../jd-matcher/jd-matcher');
 const { JDCache } = require('../jd-cache/redis-cache');
@@ -37,6 +39,8 @@ const { calculateCertificationScore } = require('../scoring-engine/certification
 const { generateSummary } = require('../summary-generator/summary-generator');
 const { evaluateShortlist } = require('../shortlisting-engine/evaluator');
 const { logIntakeEvent } = require('../cv-intake/audit-logger');
+const { decryptFile } = require('../cv-intake/encryptor');
+const { extractText } = require('../cv-parser/text-extractor');
 
 // ─── Konstanta ────────────────────────────────────────────────────────────────
 
@@ -60,6 +64,7 @@ async function saveCandidateRecord(record) {
       languages, experience_detail,
       score, dimension_scores, recommendation, summary,
       job_id, mandatory_skills_status, jd_match_details,
+      shortlist_reason,
       cv_url, status, duplicate_of, source,
       created_at, updated_at
     ) VALUES (
@@ -68,7 +73,8 @@ async function saveCandidateRecord(record) {
       $9::jsonb, $10::jsonb,
       $11, $12::jsonb, $13, $14,
       $15, $16::jsonb, $17::jsonb,
-      $18, $19, $20, $21,
+      $18,
+      $19, $20, $21, $22,
       NOW(), NOW()
     )
     RETURNING id
@@ -92,6 +98,7 @@ async function saveCandidateRecord(record) {
     record.job_id || null,
     record.mandatory_skills_status ? JSON.stringify(record.mandatory_skills_status) : null,
     record.jd_match_details ? JSON.stringify(record.jd_match_details) : null,
+    record.shortlist_reason || null,
     record.cv_url || null,
     record.status || 'PENDING',
     record.duplicate_of || null,
@@ -165,69 +172,24 @@ async function updateCandidateRecord(recordId, updates) {
  * @param {Object} params.payload - Data notifikasi
  * @returns {Promise<void>}
  */
-async function sendNotification({ eventType, candidateId, payload }) {
-  const notificationWebhookUrl = process.env.NOTIFICATION_WEBHOOK_URL
-    || 'http://localhost:5678/webhook/notification';
-
+async function sendNotification({ eventType, candidateId, payload, telegramChatId }) {
   try {
-    // Gunakan fetch (Node 18+) atau fallback ke http module
-    const body = JSON.stringify({ eventType, candidateId, payload });
+    // Gunakan service notifikasi utama yang mendukung multi-channel
+    const result = await sendNotificationService({
+      eventType,
+      candidateId,
+      payload,
+      // Jika job datang dari Telegram, prioritaskan notifikasi balik ke Telegram
+      channels: telegramChatId ? ['telegram'] : undefined
+    });
 
-    if (typeof fetch !== 'undefined') {
-      const response = await fetch(notificationWebhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-        signal: AbortSignal.timeout(10000), // 10 detik timeout
-      });
-
-      if (!response.ok) {
-        console.warn(`[Pipeline] Notification webhook returned ${response.status} for event ${eventType}`);
-      }
+    if (result.success) {
+      console.log(`[Pipeline] Notifikasi ${eventType} berhasil dikirim via ${result.results.map(r => r.channel).join(', ')}`);
     } else {
-      // Fallback untuk Node < 18
-      const http = require('http');
-      const https = require('https');
-      const url = new URL(notificationWebhookUrl);
-      const client = url.protocol === 'https:' ? https : http;
-
-      await new Promise((resolve, reject) => {
-        const req = client.request({
-          hostname: url.hostname,
-          port: url.port,
-          path: url.pathname,
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(body),
-          },
-        }, (res) => {
-          res.resume(); // consume response
-          resolve();
-        });
-        req.on('error', reject);
-        req.setTimeout(10000, () => { req.destroy(); reject(new Error('Notification request timeout')); });
-        req.write(body);
-        req.end();
-      });
+      console.warn(`[Pipeline] Notifikasi ${eventType} gagal: ${result.reason || 'unknown'}`);
     }
-
-    console.log(`[Pipeline] Notifikasi ${eventType} dikirim untuk kandidat ${candidateId}`);
   } catch (err) {
-    // Jangan throw — kegagalan notifikasi tidak boleh menghentikan pipeline
     console.error(`[Pipeline] Gagal mengirim notifikasi ${eventType}:`, err.message);
-
-    // Catat ke audit log sebagai fallback
-    try {
-      await logIntakeEvent({
-        action: 'NOTIFICATION_FAILED',
-        entityId: candidateId,
-        errorCode: 'NOTIFICATION_FAILED',
-        details: { eventType, error: err.message },
-      });
-    } catch (auditErr) {
-      console.error('[Pipeline] Gagal mencatat NOTIFICATION_FAILED ke audit log:', auditErr.message);
-    }
   }
 }
 
@@ -247,24 +209,54 @@ function sleep(ms) {
 /**
  * Tahap 1: Parse CV dari teks yang sudah diekstrak.
  *
+ * Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6 — CV_Parser mengintegrasikan semua sub-komponen
+ *
+ * Alur:
+ * 1. Ekstrak teks dari file (jika cvText belum tersedia di job)
+ * 2. Panggil parseCV() yang melakukan:
+ *    - Normalisasi skill (SKILL_NORMALIZATION_MAP)
+ *    - Validasi output schema (semua field wajib ada)
+ *    - Tandai PARSING_INCOMPLETE jika name/email null
+ *
  * @param {Object} job - CVQueueJob dari Redis
  * @returns {Promise<Object>} Candidate_Record hasil parsing
  */
 async function stageParse(job) {
   console.log(`[Pipeline] [${job.jobId}] Tahap 1: Parsing CV...`);
 
-  // Dalam implementasi nyata, file diambil dari S3 menggunakan job.fileKey
-  // dan diekstrak teksnya menggunakan text-extractor.
-  // Untuk sekarang, asumsikan cvText sudah tersedia di job atau ambil dari storage.
-  const cvText = job.cvText || job.rawText || '';
+  // cvText bisa langsung ada di job (dari queue producer yang sudah ekstrak)
+  // atau perlu diambil dari encryptedContent yang dikirim via queue
+  let cvText = job.cvText || job.rawText || '';
 
+  // Jika cvText kosong tapi ada encryptedContent, dekripsi dan ekstrak teks
+  if (!cvText && job.encryptedContent) {
+    console.log(`[Pipeline] [${job.jobId}] Mendekripsi konten file dari queue...`);
+    try {
+      const decryptedBuffer = decryptFile(job.encryptedContent);
+      console.log(`[Pipeline] [${job.jobId}] Ekstraksi teks dari PDF...`);
+      cvText = await extractText(decryptedBuffer, job.mimeType || 'text/plain');
+      console.log(`[Pipeline] [${job.jobId}] Teks berhasil diekstrak (${cvText.length} karakter)`);
+    } catch (err) {
+      console.error(`[Pipeline] [${job.jobId}] Gagal dekripsi/ekstrak teks:`, err.message);
+      throw new Error(`FILE_PROCESSING_FAILED: ${err.message}`);
+    }
+  }
+
+  // Jika masih kosong dan ada fileKey, ini untuk integrasi S3 di masa depan
+  if (!cvText && job.fileKey) {
+    console.log(`[Pipeline] [${job.jobId}] (S3 Fallback - Not Implemented) fileKey: ${job.fileKey}`);
+  }
+
+  console.log(`[Pipeline] [${job.jobId}] Memanggil AI untuk parsing...`);
   const candidateData = await parseCV(cvText);
+  console.log(`[Pipeline] [${job.jobId}] AI berhasil mengembalikan data.`);
 
   return {
     ...candidateData,
-    cv_url: job.fileKey,
+    cv_url: job.fileKey || job.filename,
     source: job.source,
     job_id: job.positionId || null,
+    _rawJob: job, // simpan referensi job asli untuk debugging
   };
 }
 
@@ -451,6 +443,7 @@ async function processJob(job) {
     await sendNotification({
       eventType: 'PARSING_INCOMPLETE',
       candidateId: recordId || null,
+      telegramChatId: job.telegramChatId,
       payload: {
         filename: job.filename,
         source: job.source,
@@ -523,6 +516,7 @@ async function processJob(job) {
     await sendNotification({
       eventType: 'POSSIBLE_DUPLICATE',
       candidateId: recordId || null,
+      telegramChatId: job.telegramChatId,
       payload: {
         newRecord: { name: candidateData.name, email: candidateData.email, phone: candidateData.phone },
         existingRecordId: duplicateResult.existingRecordId,
@@ -622,6 +616,7 @@ async function processJob(job) {
         seniority_fit: matchResult.seniority_fit,
         keyword_overlap: matchResult.keyword_overlap,
       },
+      shortlist_reason: shortlistResult.reason,
       status: finalStatus,
     });
   } catch (err) {
@@ -648,6 +643,7 @@ async function processJob(job) {
     await sendNotification({
       eventType: 'SHORTLISTED',
       candidateId: recordId,
+      telegramChatId: job.telegramChatId,
       payload: {
         candidateName: candidateData.name,
         jobTitle,
@@ -655,6 +651,18 @@ async function processJob(job) {
         recommendation: scoringResult.recommendation,
         recordId,
         reason: shortlistResult.reason,
+      },
+    });
+  } else if (job.telegramChatId) {
+    // Jika dari Telegram tapi tidak shortlisted, kasih tau juga biar nggak nunggu
+    await sendNotification({
+      eventType: 'CANDIDATE_NOT_SHORTLISTED',
+      candidateId: recordId,
+      telegramChatId: job.telegramChatId,
+      payload: {
+        candidateName: candidateData.name,
+        score: scoringResult.score,
+        recommendation: scoringResult.recommendation
       },
     });
   }

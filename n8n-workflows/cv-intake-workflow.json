@@ -240,7 +240,7 @@
       "parameters": {
         "operation": "push",
         "key": "cv_processing_queue",
-        "value": "={{ JSON.stringify({ jobId: $json.jobId, fileKey: $json.fileKey, filename: $json.filename, source: $json.source, positionId: $json.positionId || null, enqueuedAt: $json.enqueuedAt }) }}",
+        "value": "={{ JSON.stringify({ jobId: $json.jobId, fileKey: $json.fileKey, filename: $json.filename, source: $json.source, positionId: $json.positionId || null, enqueuedAt: $json.enqueuedAt, encryptedContent: $json.encryptedContent, mimeType: $json.mimeType }) }}",
         "tail": false
       },
       "credentials": {

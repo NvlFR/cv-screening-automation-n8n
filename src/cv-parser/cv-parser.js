@@ -1,6 +1,6 @@
 'use strict';
 
-const { callOpenAI } = require('./openai-client');
+const { callAI } = require('./ai-client');
 
 /**
  * CV Parser — mengekstrak data terstruktur dari teks CV menggunakan OpenAI.
@@ -328,8 +328,8 @@ async function parseCV(cvText) {
     return emptyRecord;
   }
 
-  // Panggil OpenAI
-  const rawResponse = await callOpenAI({
+  // Panggil AI
+  const rawResponse = await callAI({
     systemPrompt: CV_PARSING_SYSTEM_PROMPT,
     userPrompt: buildCVParsingPrompt(cleanedText),
   });
@@ -337,15 +337,17 @@ async function parseCV(cvText) {
   // Parse JSON response
   let parsed;
   try {
-    // Bersihkan markdown code block jika ada (defensive)
-    const jsonStr = rawResponse
-      .replace(/^```json\s*/i, '')
-      .replace(/^```\s*/i, '')
-      .replace(/\s*```$/i, '')
-      .trim();
+    // Mencari bagian JSON di dalam respon AI (handle jika ada teks tambahan)
+    const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('Tidak ditemukan format JSON dalam respon AI');
+    }
+    
+    const jsonStr = jsonMatch[0];
     parsed = JSON.parse(jsonStr);
   } catch (parseError) {
-    throw new Error(`PARSING_FAILED: Response OpenAI bukan JSON valid: ${parseError.message}`);
+    console.error(`[CVParser] Raw Response: ${rawResponse}`);
+    throw new Error(`PARSING_FAILED: Response AI bukan JSON valid: ${parseError.message}`);
   }
 
   // Validasi dan lengkapi semua field wajib

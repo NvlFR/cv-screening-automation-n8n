@@ -1,9 +1,9 @@
 'use strict';
 
-const { callOpenAI } = require('../cv-parser/openai-client');
+const { callAI } = require('../cv-parser/ai-client');
 
 /**
- * Summary Generator — menghasilkan ringkasan naratif evaluasi kandidat menggunakan OpenAI.
+ * Summary Generator — menghasilkan ringkasan naratif evaluasi kandidat menggunakan AI.
  * Ringkasan ditulis dalam bahasa Indonesia, mencakup kekuatan, gap skill, pengalaman relevan,
  * dan rekomendasi tindak lanjut.
  *
@@ -99,17 +99,16 @@ async function generateSummary({ candidateName, jobTitle, score, recommendation,
   let summaryText;
 
   try {
-    // Req 6.1: Gunakan OpenAI API untuk menghasilkan ringkasan
-    // openai-client.js sudah memiliki retry logic 3x dengan exponential backoff (30s, 60s, 120s)
-    summaryText = await callOpenAI({
+    // Req 6.1: Gunakan AI API untuk menghasilkan ringkasan
+    summaryText = await callAI({
       systemPrompt: SUMMARY_SYSTEM_PROMPT,
       userPrompt,
       maxTokens: 600, // cukup untuk 300 kata
     });
   } catch (error) {
-    // Req 6.4: Jika OpenAI error setelah 3x retry, kembalikan GENERATION_FAILED
+    // Req 6.4: Jika AI error setelah 3x retry, kembalikan GENERATION_FAILED
     const errorMessage = error?.message || 'Unknown error';
-    console.error(`[SummaryGenerator] OpenAI gagal setelah semua retry: ${errorMessage}`);
+    console.error(`[SummaryGenerator] AI gagal setelah semua retry: ${errorMessage}`);
     return {
       summary: 'GENERATION_FAILED',
       error: errorMessage,

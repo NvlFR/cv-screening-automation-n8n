@@ -18,7 +18,8 @@ const { DuplicateDetector } = require('../../src/duplicate-detector/detector');
 // Mock OpenAI client to avoid API calls during integration tests
 jest.mock('../../src/cv-parser/openai-client', () => ({
   callOpenAI: jest.fn().mockImplementation(async (prompt) => {
-    if (prompt.includes('Ekstrak informasi dari CV')) {
+    const userPrompt = typeof prompt === 'string' ? prompt : (prompt.userPrompt || '');
+    if (userPrompt.includes('Ekstrak informasi dari CV')) {
       return JSON.stringify({
         name: 'John Doe',
         email: 'john.doe@example.com',

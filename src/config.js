@@ -46,6 +46,18 @@ const config = {
     timeoutMs: parseInt(process.env.OPENAI_TIMEOUT || '60000', 10),
   },
 
+  // Anthropic API
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    model: process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-20240620',
+    baseUrl: process.env.ANTHROPIC_BASE_URL || undefined,
+  },
+
+  // AI Provider Setting
+  ai: {
+    provider: process.env.AI_PROVIDER || 'openai', // 'openai' or 'anthropic'
+  },
+
   // S3-compatible File Storage
   s3: {
     endpoint: process.env.S3_ENDPOINT || '',
